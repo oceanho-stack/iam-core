@@ -368,6 +368,12 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 
 - [ ] **token 签发方** → 确认：共享场景由 `iam-server` 统一签发；不共享场景自签（同一 `auth/` 库，仅密钥/端点不同）。
 - [x] **JWT Claims 最小化**（已定，见 §1.1）：token 只放身份 ID + 最小字段，**权限/角色/数据范围/列权限一律存服务端**，不进 token；access 走 Bearer 头，refresh 走 httpOnly cookie/安全存储。
+- [ ] **密钥轮换（kid + JWKS）** → 推荐（业界标准，OIDC 的 JWKS 机制）：
+  - 版本放 **JWT header 的 `kid`**（密钥 ID），**不在 payload 放自造版本号**。
+  - IAM Server 持**密钥列表**，对外发布公钥集 **JWKS**（`/.well-known/jwks.json`），按 `kid` 区分新旧密钥。
+  - **轮换 = 加新钥 → 双活期（新旧共存，旧 token 仍可验）→ 旧 token 自然过期后删旧钥**。
+  - **定期轮换**（如 90 天）为常态；密钥泄露时**紧急轮换**（旧 token 靠短效快速作废）。
+  - 校验方（A/B/C 的 iam-core）拉取 JWKS，按 `kid` 选公钥本地验签，无状态。
 - [ ] **刷新 / 过期 / 登出** → 推荐（业界标准，Auth0/Keycloak 范式）：
   - **access token（JWT）短效**：默认 15–30min，无状态校验。
   - **refresh token 长效 + 轮换**：默认 7 天，每次刷新签发新 refresh（防重放）；过期可配置。
@@ -411,3 +417,4 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 | 2026-11-02 | §9.2 平台内置角色只保留 `super_admin`（其余由 super_admin 自建，已确认）；§6.4/§4 澄清 **platform 是权限系统固定域标识，非租户实体** |
 | 2026-11-02 | 采纳 DeepSeek 评审：§7 新增多租户隔离硬约束 / 审计日志 / 性能缓存点 / 已排除方案（JWT 不放权限列、不做 SQL 重写数据权限、PlatformUser 不合并） |
 | 2026-11-02 | §1.1 新增：与 admin 框架的定位区别（IAM=可复用底座，非后台应用），明确设计重心在内核复用+多租户+认证 |
+| 2026-11-02 | §9.3 新增：密钥轮换设计（header 的 kid + JWKS 密钥列表 + 双活期，不在 payload 放自造版本号） |
