@@ -299,6 +299,13 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 - **统一协议**：`Resp[T]`、code 分段、分页、Header 约定（ADR-003）。
 - **GORM 数据库无关**：不写方言，测试用内存 sqlite（ADR-004）。
 - **BaseRepo 泛型基类**：xdb 提供，IAM 的 repo 嵌入复用。
+- **多租户数据隔离（硬约束）**：共享 schema，**每张业务表必带 `tenant_id`**，一律经 BaseRepo 的租户 scope（`db.Where("tenant_id = ? AND …")`）过滤，**杜绝裸查询漏隔离**。DB 层强制，不依赖上层自觉。
+- **审计日志（必做）**：`AuditLog{ UserID, Action, Resource, ObjectID, RequestID, IP, CreatedAt }` 记录关键操作（登录 / 建租户 / 成员变更 / 授权变更 / 删除）；**平台跨租户操作必审计**。
+- **性能（落地时）**：权限判定结果做**短 TTL 缓存**（Redis）；Casbin 策略**增量同步内存**，避免每次全量加载。
+- **已排除方案（防回归）**：
+  1. 权限 / 角色 / 列权限**绝不进 JWT**（§1.1 最小化原则）。
+  2. 数据权限**不做 SQL 重写**（§5.2），行 / 列走业务扩展框架。
+  3. `PlatformUser` **不合并进 User**（§6.1 独立账号体系）。
 
 ---
 
@@ -386,3 +393,4 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 | 2026-11-02 | §9 重写：全部开放问题对照业界标准给出**推荐方案**（判定入口/JWT短效+refresh轮换/OIDC授权码+PKCE/强制走壳/租户上下文Header等），待确认 |
 | 2026-11-02 | §1.1 新增 **JWT Claims 最小化原则**（token 只放身份ID+最小字段，权限/角色/列一律存服务端）；§9.3 标记已确认 |
 | 2026-11-02 | §9.2 平台内置角色只保留 `super_admin`（其余由 super_admin 自建，已确认）；§6.4/§4 澄清 **platform 是权限系统固定域标识，非租户实体** |
+| 2026-11-02 | 采纳 DeepSeek 评审：§7 新增多租户隔离硬约束 / 审计日志 / 性能缓存点 / 已排除方案（JWT 不放权限列、不做 SQL 重写数据权限、PlatformUser 不合并） |
