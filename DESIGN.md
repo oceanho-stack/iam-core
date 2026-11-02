@@ -91,7 +91,8 @@ IAM 不做成"必须独立部署的服务"，而是**同一个内核，两种形
 iam-core/
 ├── domain/          # 纯领域模型，禁止 import gorm/gin/casbin
 │   ├── tenant.go    # Tenant（个人/企业，含 system 标记）
-│   ├── user.go      # User
+│   ├── user.go      # User（业务用户）
+│   ├── platform_user.go # PlatformUser（平台账号，独立体系）
 │   ├── membership.go# User↔Tenant 成员关系（带角色）
 │   ├── team.go      # Team + TeamMembership
 │   ├── role.go      # Role（system/tenant 作用域）
@@ -121,7 +122,7 @@ iam-core/
 User ──(Membership，带角色)──▶ Tenant ──▶ Team（租户内）
 User ──(TeamMembership)──▶ Team
 Tenant ──(Role，租户级可自定义)──▶ Policy（角色↔权限点，租户级）
-平台系统租户 "platform" ──▶ 平台角色/平台权限点（管理整个系统）
+平台平面：PlatformUser ──▶ 平台角色 ──▶ 平台权限点（platform:*，管理整个系统）
 ```
 
 ### 4.2 实体要点
@@ -129,11 +130,12 @@ Tenant ──(Role，租户级可自定义)──▶ Policy（角色↔权限点
 | 实体 | 关键字段 | 说明 |
 |---|---|---|
 | **Tenant** | `ID/Type/Slug/Status/OwnerUserID/System/配额` | 隔离顶层容器；个人/企业；`System` 标记平台租户 |
-| **User** | `ID/Username/Email/Phone/PasswordHash/Status` | 登录主体，与租户多对多 |
+| **User** | `ID/Username/Email/Phone/PasswordHash/Status` | 业务用户，与租户多对多 |
+| **PlatformUser** | `ID/Username/PasswordHash/RoleIDs/Status` | **平台账号，独立体系**，非业务 User |
 | **Membership** | `UserID/TenantID/RoleID/IsOwner/Status` | User↔Tenant 中间实体，携带租户内角色 |
 | **Team** | `TenantID/Name/Slug/LeaderUserID` | 租户内分组，数据范围授权依据 |
 | **Role** | `Scope(system/tenant)/TenantID/Name` | 平台内置 + 租户自定义 |
-| **Policy** | `TenantID/RoleID/Action/Resource/Effect` | 角色↔权限点绑定，租户级 |
+| **Policy** | `TenantID/RoleID/Action/Resource/Effect` | 角色↔权限点绑定，租户级（平台走 platform:*） |
 
 ---
 
@@ -206,25 +208,35 @@ IAM 定位为：**租户隔离 + RBAC + 统一策略判定框架（支持 ABAC /
 
 ## 6. 平台管理（第二个管理平面，已定方向）
 
-平台管理是**与租户管理垂直的独立平面**，不另起炉灶，**复用同一套建模**。
+平台管理是**与租户管理垂直的独立平面**。
 
-### 6.1 平台 = 特殊系统租户
+### 6.1 平台账号体系（已定：独立账号，不复用业务 User）
+
+平台管理员**使用独立的平台账号体系**，与业务租户的用户（User）彻底分开——平台管理员不是业务 User，也没有 Membership 进业务租户。
 
 ```
-租户（Tenant）
-├── 业务租户（个人/企业）：普通隔离
-└── 系统租户 "platform"（System=true，bootstrap 创建，不可删、不计费）
-        ├── 成员：平台管理员（super_admin / platform_admin / support）
-        ├── 角色：平台角色（复用 Role）
-        └── 权限点：平台级命名空间（platform:*）
+平台平面（独立账号体系）
+├── PlatformUser（平台账号）→ 独立实体，非业务 User
+│       登录：独立入口 / 独立凭据
+├── 平台角色（复用 Role 结构，Scope=system）
+└── 平台权限点（platform:* 命名空间）
+
+业务平面
+└── User + Membership（业务用户，与平台账号无交集）
 ```
+
+**隔离语义**：
+- 平台账号与业务 User **不互通**——一个人若是平台管理员，须有平台账号；若是业务用户，须是业务 User。两者各自独立。
+- 平台账号的角色/权限走 `platform:*` 命名空间；业务角色永远拿不到 `platform:*`，平台角色默认不进业务租户。
+
+> 权衡（记录）：独立账号体系隔离更彻底、审计清晰；代价是平台管理与业务身份两套账号、两套登录入口。此前考虑过"平台管理员复用同一套 User 靠 Membership 区分平面"，经权衡决定**独立账号体系**。
 
 ### 6.2 平台权限点与业务权限点隔离
 
 ```go
-// 业务权限点（租户内）
+// 业务权限点（租户内，主体是 User+角色）
 p, admin, tenant:A, team, create
-// 平台权限点（系统租户，跨租户特权）
+// 平台权限点（平台平面，主体是 PlatformUser+平台角色）
 p, super_admin, platform, tenant,     manage   // 管理所有租户
 p, platform_admin, platform, tenant,  read     // 只读所有租户
 ```
@@ -233,9 +245,9 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 
 ### 6.3 需定的机制
 
-- **bootstrap**：首启创建 `platform` 租户 + 内置平台角色 + 绑定首个 super_admin。
+- **bootstrap**：首启创建 `platform` 系统租户 + 平台内置角色 + 绑定首个平台超级管理员。
 - **跨租户操作**：平台管理员看/管所有业务租户，靠平台权限点 + "以租户视角操作"机制。
-- **隔离红线**：平台平面与租户平面权限点命名空间分开；业务租户不能访问 `platform:*`。
+- **隔离红线**：平台平面与租户平面账号体系、权限点命名空间全部分开；业务租户不能访问 `platform:*`。
 
 ---
 
@@ -273,7 +285,9 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 
 ### 9.2 平台管理
 
-- [ ] **平台管理员是否同时是业务租户用户**？（推荐：同一套 User，靠 Membership 区分平面）确认。
+> 已定：平台走**独立账号体系**（§6.1），不复用业务 User。剩余待细化：
+
+- [ ] 平台账号登录方式：独立账号密码？是否也支持 OIDC/SSO？
 - [ ] 平台内置角色清单定哪些？（super_admin / platform_admin / support / …）
 - [ ] bootstrap 由谁触发？（种子脚本 / 首个注册用户 / 环境变量指定 super admin）
 
@@ -310,3 +324,4 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 | 2026-11-02 | 初稿：定位/双形态/domain 骨架/权限/平台管理；列出开放问题 |
 | 2026-11-02 | §5.2 新增：IAM 与业务的数据权限边界（IAM 做 RBAC+策略框架，行/列级判定业务扩展注入） |
 | 2026-11-02 | §1.1 新增：IAM 与 RBAC 定位澄清（业界标准对照）+ 认证走 OIDC 系决策；§8 落地顺序认证前置；§9.3 收窄 |
+| 2026-11-02 | §6 平台管理改为**独立账号体系**（PlatformUser 独立实体，不复用业务 User）；同步 §3/§4/§9.2 |
