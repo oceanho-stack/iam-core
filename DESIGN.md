@@ -132,14 +132,15 @@ iam-core/
 User ──(Membership，带角色)──▶ Tenant ──▶ Team（租户内）
 User ──(TeamMembership)──▶ Team
 Tenant ──(Role，租户级可自定义)──▶ Policy（角色↔权限点，租户级）
-平台平面：PlatformUser ──▶ 平台角色 ──▶ 平台权限点（platform:*，管理整个系统）
+平台平面：PlatformUser ──▶ 平台角色(Scope=system) ──▶ 平台权限点(platform:*)
+      （平台无"系统租户"实体；"platform"仅为权限系统固定域标识）
 ```
 
 ### 4.2 实体要点
 
 | 实体 | 关键字段 | 说明 |
 |---|---|---|
-| **Tenant** | `ID/Type/Slug/Status/OwnerUserID/System/配额` | 隔离顶层容器；个人/企业；`System` 标记平台租户 |
+| **Tenant** | `ID/Type/Slug/Status/OwnerUserID/配额` | 隔离顶层容器，仅业务租户（个人/企业） |
 | **User** | `ID/Username/Email/Phone/PasswordHash/Status` | 业务用户，与租户多对多 |
 | **PlatformUser** | `ID/Username/PasswordHash/RoleIDs/Status` | **平台账号，独立体系**，非业务 User |
 | **Membership** | `UserID/TenantID/RoleID/IsOwner/Status` | User↔Tenant 中间实体，携带租户内角色 |
@@ -283,7 +284,9 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 
 ### 6.4 需定的机制
 
-- **bootstrap**：首启创建 `platform` 系统租户 + 平台内置角色 + 绑定首个平台超级管理员。
+> **`platform` 是权限系统的固定域标识，不是租户实体。** 平台平面没有"平台系统租户"这张 Tenant 记录——真正的 Tenant 表只存业务租户（个人/企业）。平台账号（PlatformUser）与平台角色直接以 `platform` 为 Casbin 域归属。
+
+- **bootstrap**：首启创建 `super_admin` 平台账号 + `super_admin` 内置角色（Scope=system），其余平台角色由 super_admin 自建。
 - **跨租户操作**：平台管理员看/管所有业务租户，靠平台权限点 + "以租户视角操作"机制。
 - **隔离红线**：平台平面与租户平面账号体系、权限点命名空间全部分开；业务租户不能访问 `platform:*`。
 
@@ -335,8 +338,8 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 ### 9.2 平台管理（账号体系已定）
 
 - [x] ~~平台账号登录方式~~ → **独立账号密码登录**（已定）。
-- [ ] **平台内置角色清单** → 推荐（业界最小集）：`super_admin`（全量）/ `platform_admin`（日常管理）/ `support`（只读+协助）/ `viewer`（只读审计）。可按需加 `auditor`。
-- [ ] **bootstrap 触发** → 推荐：**首启用种子脚本/环境变量创建** `platform` 系统租户 + 内置平台角色 + 首个 `super_admin` 平台账号（环境变量指定初始账号密码，不写死）。不接受"首个注册用户自动成平台管理员"。
+- [x] **平台内置角色** → 确认：**只内置 `super_admin`**（全量），其他平台角色（平台管理员 / support / viewer …）由 super_admin **登录后自行创建**（复用 Role，Scope=system）。不预置一整套。
+- [ ] **bootstrap 触发** → 推荐：**首启用种子脚本/环境变量创建**首个 `super_admin` 平台账号 + `super_admin` 内置角色（环境变量指定初始账号密码，不写死）；**不建"平台系统租户"实体**——`platform` 仅是权限系统固定域标识（见 §6.4）。不接受"首个注册用户自动成平台管理员"。
 
 ### 9.3 认证与 token
 
@@ -382,3 +385,4 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 | 2026-11-02 | §9.2 平台账号登录方式已定：**独立账号密码登录**（OIDC/SSO 后置可选）；同步 §6.1 |
 | 2026-11-02 | §9 重写：全部开放问题对照业界标准给出**推荐方案**（判定入口/JWT短效+refresh轮换/OIDC授权码+PKCE/强制走壳/租户上下文Header等），待确认 |
 | 2026-11-02 | §1.1 新增 **JWT Claims 最小化原则**（token 只放身份ID+最小字段，权限/角色/列一律存服务端）；§9.3 标记已确认 |
+| 2026-11-02 | §9.2 平台内置角色只保留 `super_admin`（其余由 super_admin 自建，已确认）；§6.4/§4 澄清 **platform 是权限系统固定域标识，非租户实体** |
