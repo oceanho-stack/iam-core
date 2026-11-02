@@ -51,6 +51,16 @@ IAM（系统）
 - 签发/校验 JWT，支持多端；未来接第三方登录/SSO 顺畅。
 - 授权模型：粗粒度用 OAuth 2.0 scopes，细粒度（行/列）由业务扩展（§5.2）——与业界切法一致。
 
+#### JWT Claims 最小化原则（已定，安全硬约束）
+
+JWT 是"**我是谁**"的凭据，不是"**我能做什么**"的授权单。权限、角色、数据范围一律**存服务端**，鉴权时服务端权威判定，不随 token 下发。
+
+- **JWT 只放**：`sub`（用户/平台账号 ID）、`iss`、`aud`、`exp`、`iat`、`jti`（防重放/撤销）；可选非敏感展示字段（`name`/`email`）。
+- **JWT 禁止放**：角色、权限、策略、数据范围、列权限、内部 DB 字段——服务端权威，**绝不进 token**。
+- **传输/存储**：
+  - **access token**（短效 15–30min）：走 `Authorization: Bearer` 头，SPA **不放 cookie**（防 CSRF）；App 存安全存储。
+  - **refresh token**（长效 7 天）：SPA 存 **httpOnly + Secure + SameSite cookie**（JS 不可读，防 XSS）；App/CLI 存系统安全存储。
+
 ---
 
 ## 2. 部署形态：库 + 壳双形态（已定）
@@ -331,6 +341,7 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 ### 9.3 认证与 token
 
 - [ ] **token 签发方** → 确认：共享场景由 `iam-server` 统一签发；不共享场景自签（同一 `auth/` 库，仅密钥/端点不同）。
+- [x] **JWT Claims 最小化**（已定，见 §1.1）：token 只放身份 ID + 最小字段，**权限/角色/数据范围/列权限一律存服务端**，不进 token；access 走 Bearer 头，refresh 走 httpOnly cookie/安全存储。
 - [ ] **刷新 / 过期 / 登出** → 推荐（业界标准，Auth0/Keycloak 范式）：
   - **access token（JWT）短效**：默认 15–30min，无状态校验。
   - **refresh token 长效 + 轮换**：默认 7 天，每次刷新签发新 refresh（防重放）；过期可配置。
@@ -370,3 +381,4 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 | 2026-11-02 | §6.2 新增：权限系统共用结论（账号体系独立不影响——Casbin+Role+Policy 统一，仅主体与命名空间不同） |
 | 2026-11-02 | §9.2 平台账号登录方式已定：**独立账号密码登录**（OIDC/SSO 后置可选）；同步 §6.1 |
 | 2026-11-02 | §9 重写：全部开放问题对照业界标准给出**推荐方案**（判定入口/JWT短效+refresh轮换/OIDC授权码+PKCE/强制走壳/租户上下文Header等），待确认 |
+| 2026-11-02 | §1.1 新增 **JWT Claims 最小化原则**（token 只放身份ID+最小字段，权限/角色/列一律存服务端）；§9.3 标记已确认 |
