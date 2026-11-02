@@ -318,6 +318,7 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 - **多租户数据隔离（硬约束）**：共享 schema，**每张业务表必带 `tenant_id`**，一律经 BaseRepo 的租户 scope（`db.Where("tenant_id = ? AND …")`）过滤，**杜绝裸查询漏隔离**。DB 层强制，不依赖上层自觉。
 - **审计日志（必做）**：`AuditLog{ UserID, Action, Resource, ObjectID, RequestID, IP, CreatedAt }` 记录关键操作（登录 / 建租户 / 成员变更 / 授权变更 / 删除）；**平台跨租户操作必审计**。
 - **性能（落地时）**：权限判定结果做**短 TTL 缓存**（Redis）；Casbin 策略**增量同步内存**，避免每次全量加载。
+- **认证层（已定，业界标准）**：认证协议复用 **Ory Fosite + golang-jwt**（OAuth2/OIDC、JWT、kid/JWKS，不自研协议细节，见 ADR-005）；access 15–30min 无状态 + refresh 7 天轮换 + 登出作废（Redis 黑名单）；JWT 最小化（不放权限/角色/列）；客户端表 `clients` 独立于用户表存程序身份（secret 只存 hash，应用接入时管理员注册）；**程序访问**：客户端凭证给外部程序/CLI、API key 给 CLI/脚本/第三方简单访问（Deepseek 模式）、内部微服务互调内网免认证。
 - **已排除方案（防回归）**：
   1. 权限 / 角色 / 列权限**绝不进 JWT**（§1.1 最小化原则）。
   2. 数据权限**不做 SQL 重写**（§5.2），行 / 列走业务扩展框架。
@@ -378,11 +379,20 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
   - **access token（JWT）短效**：默认 15–30min，无状态校验。
   - **refresh token 长效 + 轮换**：默认 7 天，每次刷新签发新 refresh（防重放）；过期可配置。
   - **登出/撤销**：access 靠短效自然过期；refresh 支持撤销（存 Redis 黑名单/吊销库），登出即作废。
-- [ ] **OIDC 流程** → 推荐首版支持：
-  - **授权码 + PKCE**（SPA / 手机 App 标准）
-  - **客户端凭证**（CLI / 服务间）
+- [x] **OIDC 流程**（已定，首版支持）：
+  - **授权码 + PKCE**（SPA / 手机 App 标准登录）
+  - **客户端凭证**（外部程序 / CLI）
   - **账号密码登录**（自有登录页走授权码后端）
   - 第三方登录 / SSO：预留 OIDC 发现端点，**首版不实现**。
+  - **扫码登录 / 设备授权（Device Grant）**：IAM 能力（Fosite 支持），但**非首版**，记未来能力。
+- [x] **认证协议层复用 Ory Fosite + golang-jwt**（已定，见 ADR-005）：OAuth2/OIDC 流程、JWT、kid/JWKS 由 Fosite/golang-jwt 承担，不自研；身份领域/多租户/业务权限仍自研。Fosite 不内置 API key，需要时自研。
+- [x] **客户端表 `clients`**（认证层，程序身份，独立于用户表）：
+  - `client_id`（公开）+ `secret_hash`（只存 hash）+ `name` + `grant_types` + `scopes` + `redirect_uris` + `type`（public/confidential）+ `status`。
+  - 由**应用接入 IAM 时平台/管理员注册**（非用户注册）；`client_secret` 只存 hash。
+- [x] **程序访问认证（客户端凭证 vs API key vs 内网免认证）**（已定）：
+  - **客户端凭证**：给外部程序 / CLI / 第三方调用（不可信边界），走 OAuth client credentials。
+  - **API key**：给 CLI / 脚本 / 第三方简单访问（Deepseek 模式，一个字符串直接带上，无 OAuth 概念）；首版可做，Fosite 不内置需自研（一张 `api_key` 表存 hash + 中间件）。
+  - **内部微服务互调（r→payment 等，同内网可信）**：**不强制认证**，内网直接调；仅跨网络/跨安全域/资源方要求时才用认证（避免过度设计）。
 
 ### 9.4 租户与数据共享
 
