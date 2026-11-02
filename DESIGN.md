@@ -302,46 +302,60 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 
 ---
 
-## 9. 开放问题（待沟通）
+## 9. 开放问题 → 业界标准推荐方案（待你确认）
 
-> 这是本阶段最需要的输入，逐项确认后再冻结实现。
+> 本节把此前未定的每一项，对照业界标准（Keycloak / Auth0 / Logto 等）给出**推荐方案**。勾选即视为确认；有异议则改注。
 
 ### 9.1 数据权限落地细节
 
-- [ ] IAM 的**统一判定入口（`CheckInput`）与钩子**的接口形态怎么设计？（业务如何扩展注入行/列判定）
-- [ ] 数据范围第一版做到哪：只做"租户隔离 + RBAC"？还是纳入 Team 粒度？行/列统一走扩展框架（已定方向）。
+- [x] **统一判定入口 `CheckInput` 形态**（业界：Casbin ABAC/请求上下文模型）→ 推荐：
+  ```go
+  type CheckInput struct {
+      UserID    uint64
+      TenantID  uint64
+      Subject   string   // 主体标识：业务用 user:{id}，平台用 platform_user:{id}
+      Action    string   // 如 read/create/manage
+      Resource  string   // 如 team/customer
+      Object    Object   // 业务传入数据上下文（OwnerTeamID/Columns…），供行/列扩展
+  }
+  ```
+  判定入口放 `authz.Check(ctx, CheckInput) (allowed bool, allowedColumns []string, err error)`。
+- [ ] **数据范围第一版** → 推荐：**只做"租户隔离 + RBAC + Team 粒度数据范围"**；行/列统一走 §5.2 扩展框架，不内嵌实现。
 
-### 9.2 平台管理
+### 9.2 平台管理（账号体系已定）
 
-> 已定：平台走**独立账号体系**（§6.1），不复用业务 User；平台账号**用独立账号密码登录**（不依赖业务用户体系）。剩余待细化：
-
-- [x] ~~平台账号登录方式~~ → **独立账号密码登录**（已定）。OIDC/SSO 是否支持平台管理员登录，后置可选。
-- [ ] 平台内置角色清单定哪些？（super_admin / platform_admin / support / …）
-- [ ] bootstrap 由谁触发？（种子脚本 / 首个注册用户 / 环境变量指定 super admin）
+- [x] ~~平台账号登录方式~~ → **独立账号密码登录**（已定）。
+- [ ] **平台内置角色清单** → 推荐（业界最小集）：`super_admin`（全量）/ `platform_admin`（日常管理）/ `support`（只读+协助）/ `viewer`（只读审计）。可按需加 `auditor`。
+- [ ] **bootstrap 触发** → 推荐：**首启用种子脚本/环境变量创建** `platform` 系统租户 + 内置平台角色 + 首个 `super_admin` 平台账号（环境变量指定初始账号密码，不写死）。不接受"首个注册用户自动成平台管理员"。
 
 ### 9.3 认证与 token
 
-> 已定：走 OIDC 系、JWT（§1.1）。剩余待细化：
-
-- [ ] token 签发方细节：共享场景由 `iam-server` 统一签发，不共享场景自签（确认）。
-- [ ] 刷新策略 / 过期 / 登出（token 撤销）怎么做？
-- [ ] OIDC 具体流程：授权码 / 客户端凭证？首版支持哪些登录方式（账号密码 / 第三方）？
+- [ ] **token 签发方** → 确认：共享场景由 `iam-server` 统一签发；不共享场景自签（同一 `auth/` 库，仅密钥/端点不同）。
+- [ ] **刷新 / 过期 / 登出** → 推荐（业界标准，Auth0/Keycloak 范式）：
+  - **access token（JWT）短效**：默认 15–30min，无状态校验。
+  - **refresh token 长效 + 轮换**：默认 7 天，每次刷新签发新 refresh（防重放）；过期可配置。
+  - **登出/撤销**：access 靠短效自然过期；refresh 支持撤销（存 Redis 黑名单/吊销库），登出即作废。
+- [ ] **OIDC 流程** → 推荐首版支持：
+  - **授权码 + PKCE**（SPA / 手机 App 标准）
+  - **客户端凭证**（CLI / 服务间）
+  - **账号密码登录**（自有登录页走授权码后端）
+  - 第三方登录 / SSO：预留 OIDC 发现端点，**首版不实现**。
 
 ### 9.4 租户与数据共享
 
-- [ ] 共享场景（理解 A）：**是否强制走 `iam-server` 壳**，还是允许 A/B 直连同一个共享库？
-- [ ] 一个用户多租户时，**当前操作的租户上下文**怎么传递？（每次请求带 `tenantID`，还是 token 里含多个租户？）
+- [ ] **共享场景是否强制走 iam-server 壳** → 推荐：**共享场景统一走 `iam-server`**（单一权威，避免 A/B 各自直连共享库导致的一致性/维护负担）；不共享场景各自嵌入。不提供"共享库+各自直连"的组合。
+- [ ] **多租户上下文传递** → 推荐（业界标准，多租户 SaaS）：**token 只认证用户身份，租户上下文随请求显式携带**——HTTP 头 `X-Tenant-ID`（或路径前缀 `/t/{slug}`），服务端校验该用户是该租户成员后再执行。换租户无需重新登录。
 
 ### 9.5 实体细节
 
-- [ ] Tenant 的 `slug` 唯一性约束、个人租户的配额默认值？
-- [ ] User 的 Username/Email 唯一性、是否允许空 Email（纯 OAuth）？
-- [ ] Membership 的 `IsOwner` 与 Role 的一致性由谁保证（service 层）？
+- [ ] **Tenant** → 推荐：`Slug` 全局唯一（不可变，URL 定位）；个人租户默认配额 `MaxMembers=1 / MaxTeams=0`；企业租户配额可配置。
+- [ ] **User** → 推荐：`Username` 唯一且必填；`Email` 唯一但**允许空**（纯 OAuth 用户）；`Phone` 可选。登录标识 = username 或 email 任一。
+- [ ] **Membership** → 推荐：`IsOwner` 与角色一致性由 **service 层保证**（owner 变更/转让时同步更新 Role 与 IsOwner）；不依赖触发器。
 
 ### 9.6 交付与仓库
 
-- [ ] `iam-core` 独立 git 仓库（`github.com/oceanho-stack/iam-core`），`iam-server` 是否同仓库子目录还是独立仓库？
-- [ ] docs 知识库的"仓库清单"与"当前进度"随本设计同步更新。
+- [ ] **iam-server 归属** → 推荐：**与 iam-core 同仓库子目录**（monorepo：`iam-core` 库 + `server/` 壳），便于库与壳同步演进、原子发布；将来若壳需独立部署再拆。
+- [ ] **docs 同步** → 推荐：本设计确认后，更新 docs 知识库"仓库清单"与"当前进度"。
 
 ---
 
@@ -355,3 +369,4 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 | 2026-11-02 | §6 平台管理改为**独立账号体系**（PlatformUser 独立实体，不复用业务 User）；同步 §3/§4/§9.2 |
 | 2026-11-02 | §6.2 新增：权限系统共用结论（账号体系独立不影响——Casbin+Role+Policy 统一，仅主体与命名空间不同） |
 | 2026-11-02 | §9.2 平台账号登录方式已定：**独立账号密码登录**（OIDC/SSO 后置可选）；同步 §6.1 |
+| 2026-11-02 | §9 重写：全部开放问题对照业界标准给出**推荐方案**（判定入口/JWT短效+refresh轮换/OIDC授权码+PKCE/强制走壳/租户上下文Header等），待确认 |
