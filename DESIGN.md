@@ -231,7 +231,35 @@ IAM 定位为：**租户隔离 + RBAC + 统一策略判定框架（支持 ABAC /
 
 > 权衡（记录）：独立账号体系隔离更彻底、审计清晰；代价是平台管理与业务身份两套账号、两套登录入口。此前考虑过"平台管理员复用同一套 User 靠 Membership 区分平面"，经权衡决定**独立账号体系**。
 
-### 6.2 平台权限点与业务权限点隔离
+### 6.2 权限系统共用（独立账号体系不影响，已定）
+
+**账号体系独立 ≠ 权限系统分裂**。独立的是"身份主体"（User vs PlatformUser），共用的是一整套授权引擎与模型（Casbin + Role + Policy）。这样既隔离彻底，又避免写两套权限。
+
+```
+权限系统（一套，共用）
+├── 授权引擎：Casbin（同一引擎，不区分平台/业务）
+├── 授权模型：Role + Policy（同一套结构）
+│        Role.Scope = system（平台角色）/ tenant（业务角色）
+│        Policy.TenantID = platform（平台）/ 业务租户ID
+└── 主体（subject）：谁在发起请求？
+        业务请求 → User
+        平台请求 → PlatformUser      ← 仅这层不同
+```
+
+**账号体系决定"主体是谁"，权限系统决定"这个主体能做什么"**。主体可多套，授权逻辑、Casbin 引擎、策略存储统一一套。
+
+```go
+// 业务：主体 User，域 = 业务租户
+p, admin, tenant:A, team, create
+g, user张三, admin, tenant:A
+// 平台：主体 PlatformUser，域 = platform
+p, super_admin, platform, tenant, manage
+g, platformuser_oceanho, super_admin, platform
+```
+
+同一 Casbin 实例、同一张策略表、同一套 Role/Policy 结构——仅"域（domain）"与"主体"不同。平台与业务在授权模型上零分裂（与 Keycloak 的 realm 模型一致）。
+
+### 6.3 平台权限点与业务权限点隔离
 
 ```go
 // 业务权限点（租户内，主体是 User+角色）
@@ -243,7 +271,7 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 
 **关键**：平台管理员的操作对象是**别的租户**（跨租户特权），靠 `tenant:manage` 平台权限点控制。业务角色永远拿不到 `platform:*`。
 
-### 6.3 需定的机制
+### 6.4 需定的机制
 
 - **bootstrap**：首启创建 `platform` 系统租户 + 平台内置角色 + 绑定首个平台超级管理员。
 - **跨租户操作**：平台管理员看/管所有业务租户，靠平台权限点 + "以租户视角操作"机制。
@@ -325,3 +353,4 @@ p, platform_admin, platform, tenant,  read     // 只读所有租户
 | 2026-11-02 | §5.2 新增：IAM 与业务的数据权限边界（IAM 做 RBAC+策略框架，行/列级判定业务扩展注入） |
 | 2026-11-02 | §1.1 新增：IAM 与 RBAC 定位澄清（业界标准对照）+ 认证走 OIDC 系决策；§8 落地顺序认证前置；§9.3 收窄 |
 | 2026-11-02 | §6 平台管理改为**独立账号体系**（PlatformUser 独立实体，不复用业务 User）；同步 §3/§4/§9.2 |
+| 2026-11-02 | §6.2 新增：权限系统共用结论（账号体系独立不影响——Casbin+Role+Policy 统一，仅主体与命名空间不同） |
